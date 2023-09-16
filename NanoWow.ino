@@ -5,12 +5,33 @@
 #define CONTROL_RATE 64
 
 class Block {
-protected:
+private:
 	int currentValue;
+	bool hasMap = false;
+
+protected:
+	int fromLow, fromHigh, toLow, toHigh;
 
 public:
 	int next() {
 		return currentValue;
+	}
+
+	int setCurrentValue(int val) {
+		if (hasMap) {
+			currentValue = map(val, fromLow, fromHigh, toLow, toHigh);
+		} else {
+			currentValue = val;
+		}
+	}
+
+	void setMap(int fromLow, int fromHigh, int toLow, int toHigh) {
+		this->fromLow = fromLow;
+		this->fromHigh = fromHigh;
+		this->toLow = toLow;
+		this->toHigh = toHigh;
+
+		hasMap = true;
 	}
 
 	virtual void updateControl() {}
@@ -22,6 +43,8 @@ public:
 class SinewaveOscillator : public Block {
 protected:
 	Oscil<SIN2048_NUM_CELLS, AUDIO_RATE>* osc;
+	Block* frequencyControl;
+	Block* detuneControl;
 
 public:
 
@@ -29,20 +52,28 @@ public:
 		osc = new Oscil<SIN2048_NUM_CELLS, AUDIO_RATE>(SIN2048_DATA);
 	}
 
-	void setFreq(int F) {
-		osc->setFreq(F);
+	void setFrequencyControl(Block* B) {
+		frequencyControl = B;
+	}
+
+	void setDetuneControl(Block* B) {
+		detuneControl = B;
+	}
+
+	void updateControl() {
+		osc->setFreq(frequencyControl->next() + (detuneControl ? detuneControl->next() : 0));
 	}
 
 	void updateAudio() {
-		currentValue = osc->next();
+		setCurrentValue(osc->next());
 	}
 
 };
 
 class FixedInt : public Block {
 public:
-	FixedInt() {
-		currentValue = 120;
+	FixedInt(int val) {
+		setCurrentValue(val);
 	}
 };
 
@@ -61,9 +92,24 @@ public:
 	}
 
 	void updateAudio() {
-		currentValue = source->next() * gainControl->next();
+		setCurrentValue(source->next() * gainControl->next());
 	}
 
+};
+
+class AnalogIn : public Block {
+protected:
+	int pin;
+
+public:
+	AnalogIn(int pin, int toLow, int toHigh) {
+		this->pin = pin;
+		setMap(0, 1023, toLow, toHigh);
+	}
+
+	void updateControl() {
+		setCurrentValue(mozziAnalogRead(pin));
+	}
 };
 
 #define MAX_BLOCKS 20
@@ -93,8 +139,15 @@ public:
 };
 
 SinewaveOscillator OscA;
-SinewaveOscillator V;
+AnalogIn freq(A2, 200, 2000);
+
 Amplifier amp;
+AnalogIn gain(A3, 0, 255);
+
+SinewaveOscillator lfo;
+AnalogIn lfoFreq(A4, 0, 20);
+
+
 Rack rack;
 
 void setup() {
@@ -103,15 +156,19 @@ void setup() {
 	// Add Blocks to Rack
 	rack.addBlock(&OscA);
 	rack.addBlock(&amp);
-	rack.addBlock(&V);
+	rack.addBlock(&gain);
+	rack.addBlock(&freq);
+	rack.addBlock(&lfo);
+	rack.addBlock(&lfoFreq);
 
 	// Initialize Blocks
-
-	OscA.setFreq(880);
-	V.setFreq(2);
+	// lfo.setMap(-128, 127, -50, 50);
 
 	// Wire Blocks Together
-	amp.setGainControl(&V);
+	OscA.setFrequencyControl(&freq);
+	lfo.setFrequencyControl(&lfoFreq);
+	OscA.setDetuneControl(&lfo);
+	amp.setGainControl(&gain);
 	amp.setSource(&OscA);
 }
 
